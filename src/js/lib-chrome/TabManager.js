@@ -66,7 +66,11 @@ export function restoreWindows(windows) {
  * Return the number of tabs that are open
  */
 export function getTabCount() {
-	return Chrome.queryTabs({ windowType: 'normal' }).then(tabs => tabs.length);
+	return Chrome.getPreferences(['domainBlacklist', 'ignorePinned']).then(function(items) {
+		var opts = { windowType: 'normal' };
+		if (items.ignorePinned) opts['pinned'] = false;
+		return Chrome.queryTabs(opts).then(tabs => tabs.length);
+	});
 }
 
 /**
