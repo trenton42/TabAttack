@@ -11,6 +11,10 @@
 		"message": "Export tabs as Markdown"
 	},
 
+	"options_saved": {
+		"message": "Options saved"
+	},
+
 	"headline_window": {
 		"message": "$x$ tab",
 		"placeholders": { "x": { "content": "$1" } }
@@ -39,6 +43,6 @@
 	},
 
 	"confirm_unload": {
-		"message": "You have unsaved content. Are you sure you want to close this tab?"
+		"message": "You have unsaved changes."
 	}
 }

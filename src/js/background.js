@@ -1,4 +1,5 @@
 import '6to5/polyfill';
+import defaults from './defaults';
 import debounce from './lib/debounce';
 import * as TabManager from './lib-chrome/TabManager';
 import { markdownLink } from './lib/Markdown';
@@ -7,11 +8,11 @@ import { drawIcon } from './Icon';
 import { showPopup } from './lib-chrome/Popup';
 import { getProtocol } from './lib/URLTools';
 
-var protocolBlacklist = new Set([ 'chrome-devtools:', 'chrome:', 'chrome-extension:', 'opera:' ]);
-// TODO: Make this list configurable
-// var domainBlacklist = new Set([ 'mail.google.com' ]);
-var doc, iconLocked = false;
+var doc;
+var iconLocked = false;
 var isDevMode = false;
+
+Chrome.setDefaults(defaults);
 
 /*
  * Check whether this is a development install
@@ -25,38 +26,39 @@ Chrome.getExtensionInfo().then(info => {
  */
 Chrome.onBrowserAction(sourceTab => {
 	// TODO: check for tab.status === 'complete' and issue a warning if not
-	Chrome.getAllWindows({ populate: true }).then(windows => {
+	Promise.all([
+		Chrome.getPreferences([ 'format', 'ignorePinned', 'domainBlacklist', 'protocolBlacklist' ]),
+		Chrome.getAllWindows({ populate: true })
+	]).then(([ prefs, windows ]) => {
 		// Pull a window to the top
 		// TODO: reverse order of windows/tabs completely instead
-		new Promise(function(resolve) {
-			chrome.storage.sync.get({
-				m_filter: "facebook.com\nmail.google.com",
-		    	ignore_pinned: false
-			}, resolve);
-		}).then(function(items) {
-			var index = windows.findIndex(w => w.id === sourceTab.windowId);
-			if (index > 0) {
-				windows.unshift(windows.splice(index, 1)[0]);
-			}
+		var index = windows.findIndex(w => w.id === sourceTab.windowId);
+		if (index > 0) {
+			windows.unshift(windows.splice(index, 1)[0]);
+		}
 
-			// Filter some urls
-			for (var wnd of windows) {
-				wnd.tabs = wnd.tabs.filter(tab => {
-					var url = new URL(tab.url);
-					console.log(url, tab.pinned);
-					return !protocolBlacklist.has(url.protocol) && !(items.ignore_pinned && tab.pinned); //!domainBlacklist.has(url.hostname)
-				});
-			}
+		// Filter some urls
+		for (var wnd of windows) {
+			wnd.tabs = wnd.tabs.filter(tab => {
+				var url = new URL(tab.url);
+				return !prefs.protocolBlacklist.includes(url.protocol) &&
+				       !prefs.domainBlacklist.includes(url.hostname) &&
+				       !(prefs.ignorePinned && tab.pinned);
+			});
+		}
 
-			// Ignore empty windows
-			windows = windows.filter(wnd => wnd.tabs.length > 0);
+		// Ignore empty windows
+		windows = windows.filter(wnd => wnd.tabs.length > 0);
 
-			// Create markdown document
-			doc = buildDocument(windows, sourceTab.id);
+		// Create document
+		if (prefs.format === 'json') {
+			doc = buildJSONDocument(windows, sourceTab.id);
+		} else {
+			doc = buildMarkdownDocument(windows, sourceTab.id);
+		}
 
-			// Open document in a new tab
-			TabManager.show(sourceTab, chrome.runtime.getURL('output.html'));
-		});
+		// Open document in a new tab
+		TabManager.show(sourceTab, chrome.runtime.getURL('output.html'));
 	});
 });
 
@@ -66,17 +68,18 @@ Chrome.onBrowserAction(sourceTab => {
 Chrome.onCommand('copy_current_page', () => {
 	TabManager.getActiveTab().then(tab => {
 		// Let the user modify the title (or use the domain shortcut)
-		var title = prompt(tab.title, tab.title);
+		var title = prompt('Edit the title of the link before it is copied, if you wish:\n\n' + tab.title, tab.title);
 		if (title === null || title === '') {
 			return;
 		}
 
 		var url = new URL(tab.url);
 		if (title === 'd') {
-			// Shortcut: Use naked domain name as title
+			// Shortcut: Use the naked domain name as title
 			title = url.hostname.replace(/^www\./, '');
 		} else if (title !== tab.title && isDevMode) {
-			// Record title changes (only in dev mode)
+			// Record title changes
+			// This will not trigger if the extension was installed from the Chrome Web Store!
 			require('./TitleChangelog').logChange(tab.url, tab.title, title);
 		}
 
@@ -159,7 +162,7 @@ Chrome.onCommand('detach_highlighted_pages', () => {
 /**
  * Build a markdown document from an array of windows
  */
-function buildDocument(windows, sourceTabId) {
+function buildMarkdownDocument(windows, sourceTabId) {
 	var lines = [], highlightLine = 0;
 	for (var wnd of windows) {
 		lines.push('# ' + Chrome.getString('headline_window', wnd.tabs.length));
@@ -174,7 +177,15 @@ function buildDocument(windows, sourceTabId) {
 		lines.push('');
 	}
 	lines.pop();
-	return { text: lines.join('\n'), highlightLine, created: new Date() };
+	return { format: 'markdown', text: lines.join('\n'), highlightLine };
+}
+
+/**
+ * Build a pretty-printed JSON document
+ */
+function buildJSONDocument(windows, sourceTabId) {
+	windows = windows.map(w => w.tabs.map(t => ({ title: t.title, url: t.url })));
+	return { format: 'json', text: JSON.stringify(windows, undefined, 2) };
 }
 
 /**
